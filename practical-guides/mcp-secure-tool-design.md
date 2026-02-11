@@ -151,6 +151,8 @@ The Principle of Least Privilege (PoLP) is a foundational security concept that 
 
 - **Dynamic Filtering (Exposure Control):** Only send tool definitions to the LLM that are relevant to the user's current permissions. This reduces the attack surface and the risk of the model hallucinating or attempting to use unauthorized tools.
 
+**Permission Boundary Metadata:** When tools are filtered out based on authorization policy, the agent should receive explicit permission boundary metadata explaining what categories of actions are unavailable and why, rather than tools silently disappearing from the manifest. This lets the agent plan around the constraints intentionally ("I cannot access financial data tools, so I'll ask the user to provide the data directly") rather than stumbling into failures or attempting creative workarounds that may circumvent the intended access controls.
+
 #### Anti-Pattern: Overly Broad Tools
 
 ```python
@@ -462,7 +464,7 @@ This principle directly mitigates **OWASP LLM03: Supply Chain Vulnerabilities**.
 
 - **Vetting:** Treat third-party MCP servers as untrusted dependencies. Do not assume security based on presence in a public MCP registry. Most registries function as discovery layers (similar to npm or PyPI), not vetted app stores, and are susceptible to typosquatting or malicious updates. They must be vetted with the same rigor as any other software library. Audit their source code, and review their security practices, authentication requirements, and data handling policies.
 
-- **Cryptographic Signing:** Where possible, tool manifests (definitions) and even tool responses should be cryptographically signed. This allows your agent host to verify that the tool's definition hasn't been tampered with.
+- **Cryptographic Signing:** Tool manifests (definitions) and tool responses should be cryptographically signed. This allows your agent host to verify that the tool's definition hasn't been tampered with. For tools whose outputs feed into downstream decisions or subsequent tool invocations, response signing and verification should be the default posture, consistent with the zero trust architecture in Principle 2.
 
 - **Immutable Audit Trails:** All tool *invocations* (read-only and state-changing) must be logged to a secure, immutable audit trail. This log is essential for forensics to understand what an agent did, which tool it used, and what data was passed.
 
@@ -539,7 +541,7 @@ Your security posture must adapt to the agent's autonomy level, primarily by dyn
   - SOC Automation (e.g., Palo Alto XSOAR, Tines)
 - **Tool Design:** This is the highest-risk scenario and requires the *strictest* application of **PoLP (Principle 1)**.
   - **Strict Scoping:** The agent's toolset must be *permanently* minimal and ideally limited to idempotent (safe to run multiple times) or reversible, low-impact tools.
-  - **No High-Impact Tools:** A fully autonomous agent should *never* have access to tools like `execute_database_operation` or `delete_user_account`. Those functions must be reserved for human-in-the-loop workflows.
+**Constrained High-Impact Tools:** Fully autonomous agents should only have access to high-impact tools when those tools implement built-in blast radius controls: rate limits on destructive operations, scope ceilings that cap the number of affected resources per execution, and automatic rollback triggers on anomaly detection. The autonomous workflow itself should be formally approved through a policy review process before deployment, with the approved tool set and scope constraints documented as part of that review.
   - **Rate-Limiting & Velocity Checks:** Tools exposed to autonomous agents should have strict rate limits and velocity checks to prevent a compromised or hallucinating agent from causing large-scale damage (e.g., "no more than 10 API calls per minute").
 
 Autonomy is not just a setting; it's a dynamic risk calculation. Your MCP server should be responsible for scaling the available tools up or down based on the *current* autonomy context of the request.
