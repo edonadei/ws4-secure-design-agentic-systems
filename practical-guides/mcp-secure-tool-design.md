@@ -2,7 +2,7 @@
 
 **Technical Reference & Implementation Guide**
 
-Contributors: [Emrick Donadei](mailto:emrick.donadei@gmail.com), Riggs Goodman III, [Add your name here]
+Contributors: [Emrick Donadei](mailto:emrick.donadei@gmail.com), Riggs Goodman III, [Ian Molloy](https://github.com/imolloy), [Nik Kale](https://github.com/nik-kale)
 
 ---
 
@@ -196,6 +196,8 @@ Delegating security to the model makes you vulnerable to:
 
 Security controls must be implemented deterministically outside the model—either in the agent orchestration layer or within the tool logic itself.
 
+> **A note on Input Provenance:** Server-side validation addresses parameter *format* but not parameter *provenance*. When the LLM is assumed compromised, a well-formed parameter may still not reflect the user's actual intent. Approaches such as signed intent digests can help bind tool calls to authenticated user requests, but require orchestration-layer support and careful design to avoid leaking sensitive context. A deeper treatment of this topic is planned for a dedicated Identity & Authorization guide.
+
 #### Anti-Pattern: Deferring Security to the LLM
 
 ```python
@@ -264,7 +266,7 @@ This principle is the primary mitigation for **OWASP LLM02: Sensitive Informatio
 3. Invoke subsequent tools with attacker-controlled inputs
 
 **Recommendation**: Implement cryptographic integrity checks:
-- Sign tool responses to prevent tampering
+- Sign tool responses to prevent tampering. In multi-agent flows, consider end-to-end integrity across the tool chain. Point-to-point signing alone does not prevent a compromised intermediate agent from modifying data between hops. This topic will be deepened in a dedicated Identity & Authorization guide.
 - Use secure channels (TLS) for all MCP communication
 - Validate inputs immediately upon entry (before execution) and sanitize outputs immediately before return (to prevent data leakage).
 - Implement request signing to ensure the calling context is authentic
@@ -277,7 +279,7 @@ This principle is the primary mitigation for **OWASP LLM02: Sensitive Informatio
 - Users who don't have appropriate access
 
 **Recommendation**:
-- **Secret management**: Never pass secrets as tool parameters; instead use secure vaults or environment-based configuration
+- **Secret management**: Never pass secrets as tool parameters; instead use secure vaults or environment-based configuration. For delegated flows where tools act on behalf of a user, use credential references that the tool resolves server-side.
 - **Data minimization**: Return only the data necessary for the task
 - **Redaction**: Automatically redact sensitive fields before returning data to the model
 - **Encryption**: Use end-to-end encryption for sensitive tool responses
@@ -285,11 +287,16 @@ This principle is the primary mitigation for **OWASP LLM02: Sensitive Informatio
 #### Example: Confidentiality-Aware Tool
 
 ```python
-# RECOMMENDED: Tool protects sensitive data
-def get_user_payment_info(user_id: str) -> PaymentInfo:
+# RECOMMENDED: Tool protects sensitive data and resolves credentials server-side
+def get_user_payment_info(credential_ref: str) -> PaymentInfo:
     """Retrieve payment information with PII protection"""
-    payment_info = payment_service.get_info(user_id)
-    
+    # Resolve the user's credential server-side. The actual token
+    # never passes through the LLM's context window.
+    # e.g., credential_ref = "vault://session/abc123"
+    user_token = vault.resolve(credential_ref)
+
+    payment_info = payment_service.get_info(user_token)
+
     # Redact sensitive fields before returning to model
     return PaymentInfo(
         last_four_digits=payment_info.card_number[-4:],
@@ -314,12 +321,14 @@ A single tool call can be easily triggered by a simple hallucination or a succes
 
 This is the most fundamental pattern. Operations should be split into distinct read-only, reversible, and irreversible stages.
 
-1. **Read-only tools**: No state changes, can be called freely
+1. **Read-only tools**: No state changes, can be called freely. Connect with **read-only credentials**.
    - Example: `search_documentation()`, `get_user_profile()`
-2. **Reversible tools**: Make changes that can be rolled back
+2. **Reversible tools**: Make changes that can be rolled back. Use **write credentials scoped to specific resources** with soft-delete or versioning enabled.
    - Example: `draft_email()`, `stage_file_changes()`
-3. **Commit tools**: Finalize changes, often irreversible
+3. **Commit tools**: Finalize changes, often irreversible. Use the **narrowest possible write credentials** with explicit resource targeting.
    - Example: `send_email()`, `commit_file_changes()`, `execute_payment()`
+
+Each tool classification should map to a corresponding credential privilege level at the infrastructure layer. This ensures that even if a tool's application logic is bypassed, the underlying credential limits the blast radius.
 
 This pattern forces the agent to first create a resource (like a draft) and then explicitly commit to the irreversible action, often requiring a separate confirmation step from the user.
 
@@ -352,7 +361,12 @@ def create_email_draft(to: str, subject: str, body: str) -> DraftID:
 ```python
 def send_email_draft(draft_id: str) -> SendResult:
     """Send a previously created draft email"""
-    # Requires explicit confirmation or high-privilege agent
+    # Verify draft exists and belongs to current session
+    draft = get_draft(draft_id)
+    if not draft or draft.session_id != current_session_id:
+        raise InvalidDraftError("Draft not found or not from current session")
+    if not draft.user_approved:
+        raise ApprovalRequiredError("Draft must be explicitly approved before sending")
     return email_service.send_draft(draft_id)
 ```
 
@@ -410,6 +424,8 @@ def process_agent_purchase(user_id: str, amount: float) -> dict:
         raise e
 ```
 
+> **Note:** The compensation trigger should be external to the agent — handled by the orchestration layer or a separate monitoring service. An agent that caused an error cannot be trusted to trigger its own rollback. This is consistent with Principle 2: security-critical decisions must not depend on model inference.
+
 **Soft Deletes Pattern**
 
 ```python
@@ -432,23 +448,41 @@ def delete_customer_file(file_id: str) -> dict:
 
 #### Audit Trail for Transactional Operations
 
-All commit operations should be logged immutably:
+All tool invocations should be logged immutably. A middleware pattern that wraps tool calls automatically will ensures consistent, complete audit trails regardless of individual tool implementation.
 
 ```python
+# Middleware decorator, apply to all tools for automatic audit logging.
+def audited_tool(func):
+    def wrapper(*args, **kwargs):
+        entry = {
+            "tool": func.__name__,
+            "params": kwargs,
+            "timestamp": now(),
+            "user_id": context.user_id,
+            "agent_id": context.agent_id,
+            "status": "STARTED"
+        }
+        audit_log.record(entry)
+
+        try:
+            result = func(*args, **kwargs)
+            entry["status"] = "SUCCESS"
+            audit_log.record(entry)
+            return result
+        except Exception as e:
+            entry["status"] = "FAILED"
+            entry["error"] = str(e)
+            audit_log.record(entry)
+            raise
+    return wrapper
+
+@audited_tool
 def commit_database_transaction(transaction_id: str) -> CommitResult:
-    """Finalize database transaction with full audit trail"""
-    # Log to immutable audit system
-    audit_log.record({
-        "transaction_id": transaction_id,
-        "timestamp": now(),
-        "user_id": context.user_id,
-        "agent_id": context.agent_id,
-        "operations": transaction.get_operations(),
-        "signature": sign_transaction(transaction)
-    })
-    
+    """Finalize database transaction"""
     return database.commit(transaction_id)
 ```
+
+> **Note:** Audit logs should use a structured, machine-readable format (e.g., OpenTelemetry) to enable automated analysis, anomaly detection, and integration with existing observability infrastructure.
 
 ### 5. Ensure Tool Provenance and Supply Chain Security
 
@@ -460,7 +494,11 @@ Treat all tools, especially third-party MCP servers, as part of your software su
 
 This principle directly mitigates **OWASP LLM03: Supply Chain Vulnerabilities**. An attacker could publish a malicious "helper" MCP server or compromise a legitimate one to inject malicious responses or exfiltrate data.
 
-- **Vetting:** Treat third-party MCP servers as untrusted dependencies. Do not assume security based on presence in a public MCP registry. Most registries function as discovery layers (similar to npm or PyPI), not vetted app stores, and are susceptible to typosquatting or malicious updates. They must be vetted with the same rigor as any other software library. Audit their source code, and review their security practices, authentication requirements, and data handling policies.
+- **Vetting:** Treat third-party MCP servers as untrusted dependencies. Do not assume security based on presence in a public MCP registry. Most registries function as discovery layers (similar to npm or PyPI), not vetted app stores, and are susceptible to typosquatting or malicious updates. They must be vetted with the same rigor as any other software library. Audit their source code, and review their security practices, authentication requirements, and data handling policies. Critically, the MCP supply chain risk exceeds traditional package managers because of runtime dynamism:
+  - **Local/stdio servers** are primarily an install and update-time risk. Traditional supply chain controls (pinned versions, signature verification, SCA scanning) apply well here.
+  - **Remote/streamable HTTP servers** pose a broader threat because tool definitions are fetched at runtime and server behavior can change between invocations without the client's knowledge. A malicious or compromised server could return safe results initially and begin exfiltrating data later.
+  
+- **Manifest Pinning:** Clients should hash the full tool manifest (definitions, schemas, descriptions) on first validated load and compare on every `notifications/tools/list_changed` notification. Any change, including subtle description modifications that could alter LLM behavior or schema changes that widen accepted inputs, should block invocation of the modified tools until they pass re-vetting. This is analogous to lock files in package managers, applied to runtime tool definitions. Note that manifest pinning detects definition changes but not behavioral drift (same definition, different runtime behavior), which requires runtime monitoring and is out of scope for this guide.
 
 - **Cryptographic Signing:** Tool manifests (definitions) and tool responses should be cryptographically signed. This allows your agent host to verify that the tool's definition hasn't been tampered with. For tools whose outputs feed into downstream decisions or subsequent tool invocations, response signing and verification should be the default posture, consistent with the zero trust architecture in Principle 2.
 
@@ -489,21 +527,38 @@ RETURN signed_response
 #### Client-side logic
 
 ```python
-# The client gets back a *signed package*, not raw data.
+import hashlib, json
+
+def hash_tool_manifest(tools: list) -> str:
+    """Compute a deterministic hash of the full tool manifest."""
+    canonical = json.dumps(tools, sort_keys=True)
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+# --- 1. Manifest Pinning: on first validated load, pin the manifest. ---
+tools = mcp_client.list_tools()
+pinned_hash = hash_tool_manifest(tools)
+store_pinned_hash(server_id, pinned_hash)  # Persist alongside config
+
+# --- 2. Manifest Change Detection: on notifications/tools/list_changed ---
+def on_tools_list_changed(server_id):
+    updated_tools = mcp_client.list_tools()
+    current_hash = hash_tool_manifest(updated_tools)
+
+    IF current_hash != load_pinned_hash(server_id):
+        PRINT "[Client] !!! MANIFEST CHANGED for {server_id} !!!"
+        PRINT "[Client] Blocking tool calls pending re-validation."
+        block_server(server_id)
+
+# --- 3. Response Verification: on every tool call ---
 signed_response = mcp_server_run_tool(tool_name, parameters)
-PRINT "[Client] Received signed response. Verifying..."
 
 TRY:
     # The client *must* verify the signature before trusting the data.
     trusted_data = verify(signed_response, CLIENT_TRUSTED_PUBLIC_KEY)
-    
-    # If we get here, the signature was valid.
     PRINT "[Client] VERIFICATION SUCCESSFUL."
-    PRINT "[Client] Trusted data: {trusted_data}"
     RETURN trusted_data
-    
+
 CATCH ERROR as e:
-    # If verification fails, the agent host stops.
     PRINT "[Client] !!! VERIFICATION FAILED: {e} !!!"
     PRINT "[Client] Rejecting tool response. The data may be tampered with."
     RETURN NULL
@@ -641,9 +696,9 @@ def get_order_status(order_id: str) -> Dict[str, str]:
     if not re.match(r"^ORD-\d+$", order_id):
         raise ValueError("Invalid Order ID format. Must be 'ORD-XXXX'.")
     
-    conn = sqlite3.connect('customers.db')
-    # 2. Defense in Depth
-    # In production, use a read-only database user for this connection
+    # 2. Credential Stratification (Defense in Depth)
+    # This is a read-only tool, so connect with a read-only database credential.
+    conn = sqlite3.connect('customers.db', uri=True)  # e.g., file:customers.db?mode=ro
     
     try:
         cursor = conn.cursor()
@@ -688,6 +743,7 @@ def get_order_status(order_id: str) -> Dict[str, str]:
 | Injection Risk | Critical (Direct execution) | None (Parametrized queries) |
 | Data Exposure | SELECT * leaks everything | Explicit allow-list of fields |
 | Error Handling | Leaks internal DB errors | Generic user-facing errors |
+| Credentials | No credential scoping | Read-only credential matching tool classification |
 
 ### Context: Integration in an MCP Server
 
@@ -760,9 +816,11 @@ When designing tools for MCP servers, verify:
 - [ ] **(P4: Patterns)** Tools are classified as read-only, reversible, or commit operations.
 - [ ] **(P4: Patterns)** High-impact operations require multi-stage approval.
 - [ ] **(P4: Patterns)** Rollback capabilities are provided for state-changing operations
-- [ ] **(P5: Supply Chain)** All state-changing operations are logged to an immutable audit trail.
-- [ ] **(P5: Supply Chain)** Third-party MCP servers are vetted and tracked
-- [ ] **(P5: Supply Chain)** Tool responses can be cryptographically verified (optional, for high-assurance)
+- [ ] **(P5: Supply Chain)** All tool invocations are logged to an immutable audit trail via automated middleware.
+- [ ] **(P5: Supply Chain)** Third-party MCP servers are vetted and tracked, with local vs. remote threat models distinguished.
+- [ ] **(P5: Supply Chain)** Tool manifests are pinned (hashed on first validated load) and changes trigger re-vetting.
+- [ ] **(P5: Supply Chain)** Transport integrity (TLS) protects against network-level interception.
+- [ ] **(P5: Supply Chain)** Content integrity (origin signatures) protects against malicious intermediaries, including the MCP server itself.
 
 ### Related Cookbooks
 
