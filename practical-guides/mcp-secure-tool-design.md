@@ -126,9 +126,7 @@ This appendix provides detailed implementation guidance for the controls defined
 
 ### Complimentary Cookbooks
 
-- [Guardrails and Red Teaming](https://docs.google.com/document/d/1cY05NHB8CBcQBN5Oe4uNEROFrJe0PDYecYqHAsHDgMQ/edit?tab=t.ae8fe3k6kx6)
-- [Identity & Authorization](https://docs.google.com/document/d/1cY05NHB8CBcQBN5Oe4uNEROFrJe0PDYecYqHAsHDgMQ/edit?tab=t.yecpxve7vhim)
-- [MCP Gateway Architecture](https://docs.google.com/document/d/1cY05NHB8CBcQBN5Oe4uNEROFrJe0PDYecYqHAsHDgMQ/edit?tab=t.ddktphmf63h)
+** Coming soon **
 
 ### 1. Enforce the Principle of Least Privilege (PoLP)
 
@@ -768,8 +766,7 @@ When designing tools for MCP servers, verify:
 
 ### Related Cookbooks
 
-- See [Guardrails & Red Teaming](https://docs.google.com/document/d/1cY05NHB8CBcQBN5Oe4uNEROFrJe0PDYecYqHAsHDgMQ/edit?tab=t.ae8fe3k6kx6) for input filtering patterns
-- See [Identity and Authorization](https://docs.google.com/document/d/1cY05NHB8CBcQBN5Oe4uNEROFrJe0PDYecYqHAsHDgMQ/edit?tab=t.yecpxve7vhim) for access control implementation
+** Coming soon **
 
 ---
 
