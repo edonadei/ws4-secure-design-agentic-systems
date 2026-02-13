@@ -2,7 +2,7 @@
 
 **Technical Reference & Implementation Guide**
 
-Contributors: [Emrick Donadei](mailto:emrick.donadei@gmail.com), Riggs Goodman III, [Ian Molloy](https://github.com/imolloy), [Nik Kale](https://github.com/nik-kale)
+Contributors: [Emrick Donadei](mailto:edonadei@google.com), [Riggs Goodman III](mailto:goriggs@amazon.com), [Ian Molloy](mailto:molloyim@us.ibm.com), [Nik Kale](mailto:nikkal@cisco.com)
 
 ---
 
