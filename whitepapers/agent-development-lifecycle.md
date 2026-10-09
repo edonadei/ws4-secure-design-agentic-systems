@@ -209,7 +209,7 @@ Establish provenance and trust for everything the agent will incorporate: models
 
 *Repairs assumption 2.*
 
-Author the policy surface as a first-class artifact: system instructions with injection-resistant construction; the tool permission manifest, at least privilege per tool; memory retention and filtering policy; trust assignments over retrieval sources; the conditions that trigger human approval; and the instrumentation that will make runtime behavior observable.
+Author the policy surface as a first-class artifact: system instructions with injection-resistant construction; the tool permission manifest, at least privilege per tool; memory retention and filtering policy; trust assignments over retrieval sources; the conditions that trigger human approval; and the instrumentation that will make runtime behavior observable. That instrumentation also records which systems and people come to depend on the agent, and which knowledge it holds that is stored nowhere else, because Decommissioning (section 3.8) must enumerate both and cannot recover them afterwards.
 
 Each of these is versioned, reviewed by someone other than its author, and revertible independently of the code around it.
 
@@ -249,27 +249,46 @@ Enforce memory-write policy. Capture provenance and source attribution for anyth
 
 ### 3.7 Maintenance
 
-*Repairs assumptions 1 and 2.*
+*Repairs assumptions 1, 2, and 4.*
 
-Changes to a live agent re-enter review rather than accumulating. A change to the policy surface is treated as a change to behavior, because it is one: behavioral regression testing runs after any change, the baseline is re-established, and instructions and handling logic revert together as a unit rather than drifting apart.
+Every change to a live agent goes through review, so unreviewed changes do not stack up between releases. A change to the policy surface is treated as a change to behavior, because it is one. Before promotion, the changed agent runs the behavioral regression suite and its results are compared against the current baseline. A reviewer other than the author confirms what authority the change adds or removes, using the same test as section 3.3, because a new permission that the suite never exercises will not show up as a behavioral difference. The accountable owner accepts any difference before a new baseline is recorded. Recording a new baseline without that comparison would turn a regression into the expected behavior. Instructions, handling logic, instrumentation, and the pinned model version, where one exists, revert together as a unit, so the agent never runs a combination that nobody reviewed.
 
-Upstream change is the harder half. A model updated behind an API, a framework patched, a tool's contract altered: none of these are changes the deploying organization initiated, and each can alter agent behavior. Maintenance is the phase that notices.
+Some changes are too large for this phase. Adding a tool, widening a permission, adding a data classification the agent may read or retain, or raising its autonomy changes what the agent is permitted to do, and returns it to Scoping and design (section 3.1) and Admission (section 3.4). Small changes that each pass review can still add up to an agent nobody admitted, so the owner compares the current policy surface against the admitted design record at an interval the organization sets.
 
-**Gate.** No change to the policy surface, and no change to a prerequisite, reaches production without re-baselining behavior.
+Upstream change is the harder half. A model updated behind an API, a framework patched, a tool's contract altered, a retrieval corpus edited by another team: the deploying organization initiated none of these, and each can alter agent behavior. Where a provider allows version pinning, the agent runs on a pinned version, and an upgrade becomes a change the organization makes, subject to the gate below. Where pinning is not possible, the organization cannot stop the change from reaching production. Runtime drift detection (section 3.5) is then the control, and a detected upstream change returns the agent to this gate. Maintenance also tracks provider changelogs and deprecation notices, so that a change announced in advance is tested before it arrives. Durable memory writes are governed by section 3.6.
+
+Emergency changes, such as a patch for an exploited vulnerability or a policy tightened during an incident, may reach production before the full comparison runs. The change record says so, the comparison runs within a period the organization sets, and the owner signs off afterward. An emergency path that leaves no record is a bypass.
+
+Pausing, suspending, and quarantining a live agent are reversible states. Runtime imposes them; Maintenance governs the return to service, which passes the same gate as any other change. The organization names who may lift each state. An agent that cannot pass this gate stays out of service or is decommissioned (section 3.8).
+
+The evidence for each change is a change record linking the diff, the baseline comparison, the reviewer, the owner's acceptance, and the rollback point.
+
+**Gate.** A change the organization makes reaches production only after a reviewer other than its author confirms what authority it adds or removes, and the accountable owner accepts any difference from the current baseline before a new baseline is recorded. Upstream dependencies are pinned where the provider allows it. Where they cannot be pinned, drift detected at Runtime returns the agent to this gate.
 
 ### 3.8 Decommissioning
 
-*Repairs assumption 5.*
+*Repairs assumptions 3 and 5.*
 
-Decommissioning ends the agent's authority to act. Whether it can come back later is a policy choice, and if it comes back it re-enters through Admission as a new entity. Pausing, suspending, or quarantining a live agent are Runtime or Maintenance states, not this phase. An agent that can resume under the same admitted identity has not been decommissioned. This definition was settled on the working group's RFC [^10] after a longer draft with "soft" and "hard" modes was withdrawn; what looked like two modes was one phase with parameters the organization sets.
+Decommissioning ends the agent's authority to act [^10]. Whether it can come back later is a policy choice. If it comes back, it re-enters through Scoping and design (section 3.1) and then Admission (section 3.4) as a new entity with a new identifier, because its old design record may no longer hold; the tombstoned identifier is never reissued. Pausing, suspending, and quarantining are reversible states covered in section 3.7. An agent that can resume under the same admitted identity has not been decommissioned.
 
-Every decommissioning does the same things, whatever the organization's retention rules. Record who requested retirement, who approved it, and why. Freeze inbound invocation. Revoke authenticators and tombstone the identifier rather than delete it, because a deleted identifier breaks replay detection. Revoke delegated authority across every sub-agent the agent created. Enumerate its resources across every system it touched and give each one a disposition: revoked, deleted, cryptographically shredded, retained until a date, held for legal reasons, handed over to a successor, or an explicit exception with an owner and an expiry. Publish the terminal state and its effective time where a relying party can check it without the retiring organization's help. Store the disposition receipt: retired identity, authorizer, effective time, each asset's disposition, evidence references, and exceptions.
+Decommissioning starts on request or on a trigger. The organization sets the triggers, and they include at least these: the owner leaves without transferring ownership, the purpose recorded at design time has ended, the agent has not been invoked for a set period, a change fails the Maintenance gate and cannot be fixed, or an upstream dependency is lost. The accountable owner approves retirement. When the owner is gone, a fallback role that the organization names in advance approves instead, so a lapsed owner starts decommissioning rather than blocking it.
 
-What varies is set by the organization, in the way NIST SP 800-53 leaves parameters to the implementer [^9]: who may authorize, whether dual control or a legal-hold check is required, how each store is disposed of, how long held assets are kept, which sanitization technique applies, how long the tombstoned identifier is retained, and which archived artifacts may enter a later Admission. Archiving the traces and purging the tool grants of the same agent is a valid combination.
+Every decommissioning performs the same steps, in this order, whatever the organization's retention rules:
 
-Two losses are easy to miss. Other systems and people may have come to depend on capabilities the agent was never documented as providing, and the agent may hold knowledge that exists nowhere else. Both should be enumerated before the receipt closes, and instrumented for at development time, since neither can be recovered afterwards. Decommissioning can also be imposed, when an upstream provider disappears or a dependency breaks. The steps above still apply; some confirmations cannot be obtained, and the receipt records that as an exception rather than pretending otherwise.
+1. Record who requested retirement, who approved it, which trigger applied, and why.
+2. Freeze inbound invocation, and disable triggers the agent created, such as webhooks, subscriptions, and scheduled jobs, so that nothing fires during teardown. Work already in flight is the subject of open question 2 in section 5.
+3. Revoke authenticators and tombstone the identifier rather than delete it. A deleted identifier breaks replay detection: a verifier can no longer recognize an old credential or signed message from this agent as one it should reject.
+4. Revoke the authority the agent delegated to sub-agents it created. A sub-agent admitted as its own entity, with its own owner, is either decommissioned with its creator or transferred to a new owner; it does not keep running on authority that no longer exists. Grants that people gave the agent, such as OAuth consents, are revoked at the provider that issued them.
+5. Enumerate the agent's resources and give each one a disposition: revoked, deleted, cryptographically shredded (made unreadable by destroying the key that encrypts it), retained until a date, held for legal reasons, handed over to a successor, or an explicit exception with an owner and an expiry. The enumeration draws on the supply chain inventory (section 3.2), the identity provider's grant logs, and the Runtime decision traces (section 3.5). Residue found outside those sources is recorded as an exception.
+6. Locate knowledge the agent consolidated into shared memory or retrieval stores, using the provenance captured under section 3.6. Other agents may treat that knowledge as authoritative, so its disposition accounts for them. If that provenance was never captured, this step cannot be completed, and the receipt says so.
+7. Publish the terminal state and its effective time where a relying party (any system or person that trusts this agent's identity or output) can check it without the retiring organization's help, much as certificate revocation status is published.
+8. Store the disposition receipt: retired identity, authorizer, trigger, effective time, each asset's disposition, evidence references, and exceptions. The receipt is tamper-evident and retained for a period the organization sets.
 
-**Gate.** Teardown is evidenced rather than asserted. A decommissioning that cannot show what was revoked, what was retained, and when authority ended has not completed. A verifier holding a record signed by this identity can place it before or after that moment, or report that it cannot.
+What varies is set by the organization, in the way NIST SP 800-53 leaves parameters to the implementer [^9]: who may authorize, who serves as the fallback approver, whether dual control (two people must approve) or a legal-hold check is required, how each store is disposed of, how long held assets are kept, which sanitization technique applies, how long the tombstoned identifier is retained, and which archived artifacts may enter a later Admission. Archiving the traces and purging the tool grants of the same agent is a valid combination.
+
+Two losses are easy to miss. Other systems and people may have come to depend on capabilities the agent was never documented as providing, and the agent may hold knowledge that exists nowhere else. Both should be enumerated before the receipt closes, using the instrumentation required in section 3.3, since neither can be recovered afterwards. Decommissioning can also be imposed, when an upstream provider disappears or a dependency breaks. The steps above still apply; some confirmations cannot be obtained, and the receipt records that as an exception rather than pretending otherwise.
+
+**Gate.** Teardown is evidenced rather than asserted. A decommissioning that cannot show what was revoked, what was retained, and when authority ended has not completed. Anyone holding a record signed by this identity can tell whether it was signed before or after authority ended, if the signature carries a timestamp from a source the agent did not control. Otherwise the verifier reports that it cannot tell.
 
 ---
 
@@ -293,8 +312,8 @@ Migration cost concentrates in the first and last of these. Most organizations a
 |---|---|---|
 | 1. Behavior fixed at build | Scoping and design | Admission, runtime, maintenance |
 | 2. Reviewable artifact is code | Development | Supply chain, maintenance |
-| 3. Identity is a service account | Admission and deployment | Runtime |
-| 4. Testing approximates production | Admission and deployment | Runtime |
+| 3. Identity is a service account | Admission and deployment | Runtime, decommissioning |
+| 4. Testing approximates production | Admission and deployment | Runtime, maintenance |
 | 5. Retirement is deletion | Decommissioning | Reflection and knowledge consolidation |
 
 No assumption is repaired by a single phase, which is the point of framing the lifecycle this way. A gate is only as good as the evidence produced upstream of it and the enforcement downstream.
@@ -451,8 +470,8 @@ Participants in the lifecycle work from which this paper is drawn, listed alphab
 | 4 | Admission and deployment | Identity bound, prerequisites verified, baseline recorded. Unmet prerequisites block deployment |
 | 5 | Runtime | Continuous enforcement, evidence, and demonstrated intervention capability |
 | 6 | Reflection and knowledge consolidation | Nothing becomes durable without provenance and a policy check |
-| 7 | Maintenance | No change to the policy surface or a prerequisite reaches production without re-baselining |
-| 8 | Decommissioning | Teardown evidenced, not asserted; terminal state and its effective time published |
+| 7 | Maintenance | An organization-made change reaches production only after authority review and owner acceptance of any baseline difference; unpinnable upstream change detected at Runtime returns the agent to this gate |
+| 8 | Decommissioning | Teardown evidenced, not asserted; terminal state and its effective time published; residue outside the enumeration recorded as an exception |
 
 ---
 
